@@ -24,19 +24,20 @@ func (c *Checker) Check(address string) (domain.CheckResult, error) {
 	address = normalizeURL(address)
 
 	start := time.Now()
+	formattedTime := start.Format("2006-01-02 15:04:05")
 
 	resp, err := c.client.Get(address)
 	if err != nil {
 		return domain.CheckResult{
 			Status:    domain.StatusDown,
 			ErrMsg:    err.Error(),
-			LatencyMs: int64(time.Since(start).Milliseconds()),
-			CheckedAt: time.Now(),
+			LatencyMs: time.Since(start).Round(time.Millisecond).String(),
+			CheckedAt: formattedTime,
 		}, nil
 	}
 	defer resp.Body.Close()
 
-	latency := time.Since(start).Milliseconds()
+	latencyStr := time.Since(start).Round(time.Millisecond).String()
 	status := domain.StatusUp
 	if resp.StatusCode >= 400 {
 		status = domain.StatusDown
@@ -44,8 +45,8 @@ func (c *Checker) Check(address string) (domain.CheckResult, error) {
 	return domain.CheckResult{
 		Status:     status,
 		StatusCode: resp.StatusCode,
-		LatencyMs:  int64(latency),
-		CheckedAt:  time.Now(),
+		LatencyMs:  latencyStr,
+		CheckedAt:  formattedTime,
 	}, nil
 }
 

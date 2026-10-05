@@ -28,9 +28,9 @@ type CheckResult struct {
 	TargetID   int64        `json:"target_id" db:"target_id"`       // Связь с Target
 	Status     TargetStatus `json:"status" db:"status"`             // UP или DOWN
 	StatusCode int          `json:"status_code" db:"status_code"`   // HTTP-код ответа
-	LatencyMs  int64        `json:"latency_ms" db:"latency_ms"`     // Время отклика в миллисекундах
+	LatencyMs  string       `json:"latency_ms" db:"latency_ms"`     // Время отклика в миллисекундах
 	ErrMsg     string       `json:"err_msg,omitempty" db:"err_msg"` // Текст ошибки, если ресурс недоступен
-	CheckedAt  time.Time    `json:"checked_at" db:"checked_at"`     // Точное время проверки
+	CheckedAt  string       `json:"checked_at" db:"checked_at"`     // Точное время проверки
 }
 
 // CheckRequest — структура для проверки списка адресов через API.
