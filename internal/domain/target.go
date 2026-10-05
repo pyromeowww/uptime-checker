@@ -37,3 +37,8 @@ type CheckResult struct {
 type CheckRequest struct {
 	Addresses []string `json:"addresses"` // Список URL / IP / доменов для быстрой проверки
 }
+
+// CheckResponse — результат выполнения проверки для всех запрошенных адресов.
+type CheckResponse struct {
+	Results []CheckResult `json:"results"`
+}
