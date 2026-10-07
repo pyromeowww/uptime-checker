@@ -21,9 +21,9 @@ func RunServer(cfg *config.Config, chk *checker.Checker) {
 		Addr:         cfg.Port,
 		Handler:      mux,
 		ErrorLog:     logger,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	logger.Printf("The server is running. Port: %s", cfg.Port)

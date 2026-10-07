@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/pyromeowww/uptime-checker/internal/config"
+	_ "modernc.org/sqlite"
 )
 
 const (
@@ -52,11 +53,19 @@ func Init(cfg *config.Config) (err error) {
 		if info.IsDir() {
 			return fmt.Errorf("db path %q is a directory, not a file", cfg.DBFile)
 		}
+	case os.IsNotExist(err):
+		// Если файла нет — физически создаём его
+		file, createErr := os.Create(cfg.DBFile)
+		if createErr != nil {
+			return fmt.Errorf("failed to create db file %q: %w", cfg.DBFile, createErr)
+		}
+		file.Close()
 	default:
-		return err
+		return fmt.Errorf("failed to stat db file %q: %w", cfg.DBFile, err)
 	}
 
-	DB, err = sql.Open("sqlite", cfg.DBFile)
+	dsn := fmt.Sprintf("%s?mode=rwc", cfg.DBFile)
+	DB, err = sql.Open("sqlite", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
@@ -71,6 +80,7 @@ func Init(cfg *config.Config) (err error) {
 
 	schema := schemaTargets + ";" + schemaCheck_Results + ";" + indexCheck
 	if _, err := DB.Exec(schema); err != nil {
+
 		return fmt.Errorf("failed to initialize schema: %w", err)
 	}
 

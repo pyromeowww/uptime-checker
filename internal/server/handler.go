@@ -31,11 +31,21 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var res domain.CheckResponse
-	for _, addr := range req.Addresses {
-		checkAddr, _ := h.checker.Check(addr)
-		res.Results = append(res.Results, checkAddr)
+	if len(req.Addresses) == 0 {
+		writeError(w, http.StatusBadRequest, "addresses list is empty")
+		return
 	}
+
+	results, err := h.checker.Check(req.Addresses...)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Check error: "+err.Error())
+		return
+	}
+
+	res := domain.CheckResponse{
+		Results: results,
+	}
+
 	writeJSON(w, http.StatusOK, res)
 }
 

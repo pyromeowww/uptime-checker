@@ -13,8 +13,8 @@ type Config struct {
 
 func Load() *Config {
 	return &Config{
-		Port:   getPortEnv("TODO_PORT", ":8080"),
-		DBFile: getDBEnv("TODO_DB", "uptime.db"),
+		Port:   getPortEnv("UPTIME_PORT", ":8080"),
+		DBFile: getDBEnv("UPTIME_DB", "uptime.db"),
 	}
 }
 
