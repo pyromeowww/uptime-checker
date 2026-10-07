@@ -4,18 +4,22 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/pyromeowww/uptime-checker/internal/checker"
+	"github.com/pyromeowww/uptime-checker/internal/db"
 	"github.com/pyromeowww/uptime-checker/internal/domain"
 )
 
 type Handler struct {
 	checker *checker.Checker
+	store   *db.Store // Сохраняем доступ к БД
 }
 
-func NewHandler(chk *checker.Checker) *Handler {
+func NewHandler(chk *checker.Checker, store *db.Store) *Handler {
 	return &Handler{
 		checker: chk,
+		store:   store,
 	}
 }
 
@@ -35,13 +39,43 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "addresses list is empty")
 		return
 	}
+	var (
+		results []domain.CheckResult
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+	)
+	for _, addr := range req.Addresses {
+		wg.Add(1)
+		go func(url string) {
+			defer wg.Done()
+			targetID, err := h.store.GetOrCreateTarget(r.Context(), addr)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Failed to target DB "+err.Error())
+				return
+			}
+			checkResult, err := h.checker.Check(addr)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "Check error: "+err.Error())
+				return
+			}
+			// Берем первый элемент из слайса
+			checkRes := checkResult[0]
 
-	results, err := h.checker.Check(req.Addresses...)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Check error: "+err.Error())
-		return
+			// Присваиваем TargetID
+			checkRes.TargetID = targetID
+
+			// Сохраняем в базу данных
+			if err := h.store.SaveResult(r.Context(), checkRes); err != nil {
+				writeError(w, http.StatusInternalServerError, "Failed to save result: "+err.Error())
+				return
+			}
+			mu.Lock()
+			// Добавляем в итоговый массив для HTTP-ответа
+			results = append(results, checkRes)
+			mu.Unlock()
+		}(addr)
 	}
-
+	wg.Wait()
 	res := domain.CheckResponse{
 		Results: results,
 	}

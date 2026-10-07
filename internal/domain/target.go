@@ -9,7 +9,7 @@ type TargetStatus string
 const (
 	StatusUp      TargetStatus = "UP"
 	StatusDown    TargetStatus = "DOWN"
-	StatusUnknown TargetStatus = "UNKNOWN"
+	StatusPending TargetStatus = "PENDING"
 )
 
 // Target — это отслеживаемый ресурс (сайт, IP или домен)
@@ -19,7 +19,7 @@ type Target struct {
 	Interval  time.Duration `json:"interval" db:"interval"`     // Интервал проверки
 	Status    TargetStatus  `json:"status" db:"status"`         // Текущий статус
 	LastCheck time.Time     `json:"last_check" db:"last_check"` // Время последней проверки
-	CreateAt  time.Time     `json:"create_at" db:"create_at"`   // Время добавления в систему
+	CreatedAt time.Time     `json:"created_at" db:"created_at"` // Время добавления в систему
 }
 
 // CheckResult — результат отдельной проверки ресурса.

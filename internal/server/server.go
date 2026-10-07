@@ -8,13 +8,14 @@ import (
 
 	"github.com/pyromeowww/uptime-checker/internal/checker"
 	"github.com/pyromeowww/uptime-checker/internal/config"
+	"github.com/pyromeowww/uptime-checker/internal/db" // Импортируем пакет db
 )
 
-func RunServer(cfg *config.Config, chk *checker.Checker) {
+func RunServer(cfg *config.Config, chk *checker.Checker, store *db.Store) {
 	logger := log.New(os.Stdout, "[server]", log.LstdFlags|log.Lshortfile)
 
 	mux := http.NewServeMux()
-	h := NewHandler(chk)
+	h := NewHandler(chk, store) // Передаем store в хэндлер
 	mux.HandleFunc("/check", h.CheckHandler)
 
 	server := &http.Server{

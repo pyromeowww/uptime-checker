@@ -12,77 +12,69 @@ import (
 
 const (
 	schemaTargets = `CREATE TABLE IF NOT EXISTS targets (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	url TEXT NOT NULL UNIQUE,
-	status TEXT NOT NULL,
-	last_check DATETIME,
-	created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL,
+    last_check DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+
 	schemaCheck_Results = `CREATE TABLE IF NOT EXISTS check_results (
-	id INTEGER PRIMARY KEY AUTOINCREMENT,
-	target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
-	status TEXT NOT NULL,
-	status_code INTEGER,
-	latency_ms INTEGER,
-	err_msg TEXT,
-	checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	)`
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    status_code INTEGER,
+    latency_ms INTEGER,
+    err_msg TEXT,
+    checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`
+
 	indexCheck = `CREATE INDEX IF NOT EXISTS idx_check_results_target_id ON check_results(target_id);`
 )
 
-var DB *sql.DB
-
-func Close() error {
-	if DB != nil {
-		return DB.Close()
-	}
-	return nil
+type Store struct {
+	db *sql.DB
 }
 
-func Init(cfg *config.Config) (err error) {
+// New инициализирует подключение и возвращает экземпляр *Store
+func New(cfg *config.Config) (*Store, error) {
 	dir := filepath.Dir(cfg.DBFile)
 	if dir != "." && dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create db directory %q: %w", dir, err)
+			return nil, fmt.Errorf("failed to create db directory %q: %w", dir, err)
 		}
-	}
-
-	info, err := os.Stat(cfg.DBFile)
-	switch {
-	case err == nil:
-		if info.IsDir() {
-			return fmt.Errorf("db path %q is a directory, not a file", cfg.DBFile)
-		}
-	case os.IsNotExist(err):
-		// Если файла нет — физически создаём его
-		file, createErr := os.Create(cfg.DBFile)
-		if createErr != nil {
-			return fmt.Errorf("failed to create db file %q: %w", cfg.DBFile, createErr)
-		}
-		file.Close()
-	default:
-		return fmt.Errorf("failed to stat db file %q: %w", cfg.DBFile, err)
 	}
 
 	dsn := fmt.Sprintf("%s?mode=rwc", cfg.DBFile)
-	DB, err = sql.Open("sqlite", dsn)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return fmt.Errorf("failed to open database: %w", err)
-	}
-	if err = DB.Ping(); err != nil {
-		return fmt.Errorf("failed to ping database: %w", err)
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	if _, err := DB.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		return fmt.Errorf("failed to enable foreign keys: %w", err)
+	if err = db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
-	DB.SetMaxOpenConns(1)
+
+	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+	db.SetMaxOpenConns(1)
 
 	schema := schemaTargets + ";" + schemaCheck_Results + ";" + indexCheck
-	if _, err := DB.Exec(schema); err != nil {
-
-		return fmt.Errorf("failed to initialize schema: %w", err)
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
+	return &Store{db: db}, nil
+}
+
+// Close закрывает подключение к базе данных
+func (s *Store) Close() error {
+	if s.db != nil {
+		return s.db.Close()
+	}
 	return nil
 }
