@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/pyromeowww/uptime-checker/internal/checker"
+	"github.com/pyromeowww/uptime-checker/internal/config"
+	"github.com/pyromeowww/uptime-checker/internal/db"
 	"github.com/pyromeowww/uptime-checker/internal/domain"
 )
 
@@ -15,7 +18,8 @@ import (
 func TestCheckHandler_MethodNotAllowed(t *testing.T) {
 	// Создаем экземпляр хэндлера
 	chk := checker.NewChecker()
-	h := NewHandler(chk)
+	store := newTestStore(t)
+	h := NewHandler(chk, store)
 
 	req := httptest.NewRequest(http.MethodGet, "/check", nil)
 	recorder := httptest.NewRecorder()
@@ -28,7 +32,8 @@ func TestCheckHandler_MethodNotAllowed(t *testing.T) {
 // Проверяем передачу кривой строки
 func TestCheckHandler_InvalidJSON(t *testing.T) {
 	chk := checker.NewChecker()
-	h := NewHandler(chk)
+	store := newTestStore(t)
+	h := NewHandler(chk, store)
 
 	body := bytes.NewBufferString(`{invalid json}`)
 	req := httptest.NewRequest(http.MethodPost, "/check", body)
@@ -46,7 +51,8 @@ func TestCheckHandler_Success(t *testing.T) {
 	defer server.Close()
 
 	chk := checker.NewChecker()
-	h := NewHandler(chk)
+	store := newTestStore(t)
+	h := NewHandler(chk, store)
 
 	reqBody := `{"addresses": ["` + server.URL + `"]}`
 	req := httptest.NewRequest(http.MethodPost, "/check", bytes.NewBufferString(reqBody))
@@ -66,4 +72,21 @@ func TestCheckHandler_Success(t *testing.T) {
 	if resp.Results[0].Status != domain.StatusUp {
 		t.Errorf("ожидали статус %s, получили %s", domain.StatusUp, resp.Results[0].Status)
 	}
+}
+
+func newTestStore(t *testing.T) *db.Store {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	cfg := config.Config{
+		DBFile: path,
+	}
+	store, err := db.New(&cfg)
+	if err != nil {
+		t.Fatalf("не удалось создать тестовый store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		store.Close()
+	})
+	return store
 }

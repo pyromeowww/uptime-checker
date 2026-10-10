@@ -51,22 +51,28 @@ func New(cfg *config.Config) (*Store, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	var success bool
+	defer func() {
+		if !success {
+			_ = db.Close() // Закрываем, если инициализация не дошла до конца
+		}
+	}()
+
 	if err = db.Ping(); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
+	db.SetMaxOpenConns(1)
 	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
-	db.SetMaxOpenConns(1)
 
 	schema := schemaTargets + ";" + schemaCheck_Results + ";" + indexCheck
 	if _, err := db.Exec(schema); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
+
+	success = true
 
 	return &Store{db: db}, nil
 }
