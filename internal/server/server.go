@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
@@ -13,10 +14,13 @@ import (
 
 func RunServer(cfg *config.Config, chk *checker.Checker, store *db.Store) {
 	logger := log.New(os.Stdout, "[server]", log.LstdFlags|log.Lshortfile)
+	startCleanupWorker(store, 24*time.Hour, 48*time.Hour)
 
 	mux := http.NewServeMux()
 	h := NewHandler(chk, store) // Передаем store в хэндлер
-	mux.HandleFunc("/check", h.CheckHandler)
+	mux.HandleFunc("POST /check", h.CheckHandler)
+	mux.HandleFunc("GET /api/history", h.GetHistoryHandler)
+	mux.HandleFunc("GET /api/history/all", h.GetAllHistoryHandler)
 
 	server := &http.Server{
 		Addr:         cfg.Port,
@@ -33,4 +37,26 @@ func RunServer(cfg *config.Config, chk *checker.Checker, store *db.Store) {
 	if err != nil {
 		logger.Fatal("Server startup error: ", err)
 	}
+}
+
+func startCleanupWorker(store *db.Store, interval time.Duration, retentionPeriod time.Duration) {
+	go func() {
+		logger := log.New(os.Stdout, "[server]", log.LstdFlags|log.Lshortfile)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				deletedCount, err := store.DeleteOldResults(ctx, retentionPeriod)
+				cancel()
+				if err != nil {
+					logger.Printf("Failed to delete old check results: %v", err)
+				} else if deletedCount > 0 {
+					logger.Printf("Background cleanup: successfully deleted %d old check results", deletedCount)
+				}
+			}
+		}
+	}()
 }

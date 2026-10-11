@@ -42,3 +42,8 @@ type CheckRequest struct {
 type CheckResponse struct {
 	Results []CheckResult `json:"results"`
 }
+
+type CheckResultWithUrl struct {
+	CheckResult        // встраиваем базовую структуру
+	URL         string `json:"url" db:"url"` // добавляем поле с адресом
+}
