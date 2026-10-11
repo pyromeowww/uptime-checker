@@ -107,6 +107,82 @@ func TestSaveResult_Success(t *testing.T) {
 	assertTargets(t, db, ctx, id, res)
 }
 
+func TestStore_GetHistory(t *testing.T) {
+	ctx := context.Background()
+	url := "https://docker.com"
+	store, _ := newTestStore(t)
+	id, err := store.GetOrCreateTarget(ctx, url)
+	if err != nil {
+		t.Fatalf("не ожидали ошибку, но получили: %v", err)
+	}
+	res1 := domain.CheckResult{
+		TargetID:   id,
+		Status:     domain.StatusUp,
+		StatusCode: 200,
+		LatencyMs:  "123",
+		ErrMsg:     "",
+		CheckedAt:  "2026-10-09 07:02:00",
+	}
+	err = store.SaveResult(ctx, res1)
+	if err != nil {
+		t.Fatalf("не ожидали ошибку при SaveResult, но получили: %v", err)
+	}
+
+	res2 := domain.CheckResult{
+		TargetID:   id,
+		Status:     domain.StatusUp,
+		StatusCode: 200,
+		LatencyMs:  "123",
+		ErrMsg:     "",
+		CheckedAt:  "2026-10-09 09:02:00",
+	}
+	err = store.SaveResult(ctx, res2)
+	if err != nil {
+		t.Fatalf("не ожидали ошибку при SaveResult, но получили: %v", err)
+	}
+
+	period := 72 * time.Hour
+	t.Run("GetHistoryByUrl", func(t *testing.T) {
+		history, err := store.GetHistoryByUrl(ctx, url, period)
+		if err != nil {
+			t.Fatalf("не ожидали ошибку, но получили: %v", err)
+		}
+
+		if len(history) != 2 {
+			t.Errorf("ожидали 2 записи в истории, а получили %d", len(history))
+		}
+		if history[0].StatusCode != 200 {
+			t.Errorf("ожидали статус 200, получили %d", history[0].StatusCode)
+		}
+	})
+
+	t.Run("GetTargetHistoryById", func(t *testing.T) {
+		history, err := store.GetTargetHistory(ctx, id, period)
+		if err != nil {
+			t.Fatalf("не ожидали ошибку, но получили: %v", err)
+		}
+		if len(history) != 2 {
+			t.Errorf("ожидали 2 записи в истории, а получили %d", len(history))
+		}
+		if history[0].StatusCode != 200 {
+			t.Errorf("ожидали статус 200, получили %d", history[0].StatusCode)
+		}
+	})
+
+	t.Run("GetTargetHistoryAll", func(t *testing.T) {
+		history, err := store.GetAllHistory(ctx, period)
+		if err != nil {
+			t.Fatalf("не ожидали ошибку, но получили: %v", err)
+		}
+		if len(history) != 2 {
+			t.Errorf("ожидали 2 записи в истории, а получили %d", len(history))
+		}
+		if history[0].StatusCode != 200 {
+			t.Errorf("ожидали статус 200, получили %d", history[0].StatusCode)
+		}
+	})
+}
+
 func newTestStore(t *testing.T) (*Store, *sql.DB) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	dsn := fmt.Sprintf("%s?mode=rwc", path)

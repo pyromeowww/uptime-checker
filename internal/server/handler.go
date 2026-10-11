@@ -27,6 +27,11 @@ func NewHandler(chk *checker.Checker, store *db.Store) *Handler {
 }
 
 func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
 	var req domain.CheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "JSON deserialization error: "+err.Error())
@@ -109,6 +114,10 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	ctx := r.Context()
 
 	// Считываем общий параметр period (по умолчанию 24h)
@@ -122,7 +131,7 @@ func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Клиент передал URL (предпочтительный способ)
+	// Клиент передал URL
 	targetURL := r.URL.Query().Get("url")
 	if targetURL != "" {
 		history, err := h.store.GetHistoryByUrl(ctx, targetURL, period)
@@ -134,7 +143,7 @@ func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Клиент передал target_id (обратная совместимость)
+	// Клиент передал target_id
 	targetIDStr := r.URL.Query().Get("target_id")
 	if targetIDStr != "" {
 		targetID, err := strconv.ParseInt(targetIDStr, 10, 64)
@@ -157,6 +166,10 @@ func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetAllHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
 	ctx := r.Context()
 
 	periodStr := r.URL.Query().Get("period")

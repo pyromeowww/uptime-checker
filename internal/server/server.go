@@ -27,7 +27,7 @@ func RunServer(cfg *config.Config, chk *checker.Checker, store *db.Store) {
 		Handler:      mux,
 		ErrorLog:     logger,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 45 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
