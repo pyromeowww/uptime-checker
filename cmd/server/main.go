@@ -11,14 +11,20 @@ import (
 
 func main() {
 	cfg := config.Load()
-	chk := checker.NewChecker()
-	if err := db.Init(cfg); err != nil {
+
+	// 1. Инициализируем хранилище базы данных
+	store, err := db.New(cfg)
+	if err != nil {
 		log.Fatalf("Database initialization error: %v", err)
 	}
 	defer func() {
-		if err := db.Close(); err != nil {
+		if err := store.Close(); err != nil {
 			log.Printf("error closing database: %v", err)
 		}
 	}()
-	server.RunServer(cfg, chk)
+
+	chk := checker.NewChecker()
+
+	// 2. Запускаем сервер, передавая ему store для работы с БД
+	server.RunServer(cfg, chk, store)
 }
