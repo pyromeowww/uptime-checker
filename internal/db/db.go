@@ -19,7 +19,7 @@ const (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
 
-	schemaCheck_Results = `CREATE TABLE IF NOT EXISTS check_results (
+	schemaCheckResults = `CREATE TABLE IF NOT EXISTS check_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
@@ -29,7 +29,21 @@ const (
     checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`
 
-	indexCheck = `CREATE INDEX IF NOT EXISTS idx_check_results_target_id ON check_results(target_id);`
+	schemaSubscriptions = `CREATE TABLE IF NOT EXISTS subscriptions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id INTEGER NOT NULL,
+    contact_info TEXT NOT NULL,
+    period TEXT DEFAULT '1h',
+    is_active INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE
+    )`
+
+	// Отдельный индекс для быстрого поиска истории по таргету
+	indexCheckResults = `CREATE INDEX IF NOT EXISTS idx_check_results_target_id ON check_results(target_id);`
+
+	// Отдельный индекс для быстрого поиска подписок по таргету (нужен воркеру)
+	indexSubscriptions = `CREATE INDEX IF NOT EXISTS idx_subscriptions_target_id ON subscriptions(target_id);`
 )
 
 type Store struct {
@@ -67,7 +81,7 @@ func New(cfg *config.Config) (*Store, error) {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
-	schema := schemaTargets + ";" + schemaCheck_Results + ";" + indexCheck
+	schema := schemaTargets + ";" + schemaCheckResults + ";" + indexCheckResults + ";" + schemaSubscriptions + ";" + indexSubscriptions
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}

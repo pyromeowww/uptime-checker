@@ -33,6 +33,24 @@ type CheckResult struct {
 	CheckedAt  string       `json:"checked_at" db:"checked_at"`     // Точное время проверки
 }
 
+// SubscriptionRequest — то, что клиент шлет в POST-запросе
+type SubscriptionRequest struct {
+	TargetIDs   []int64  `json:"target_id,omitempty" db:"target_id"`
+	URLs        []string `json:"url,omitempty" db:"url"`
+	ContactInfo string   `json:"contact_info" db:"contact_info"`
+	Period      string   `json:"period,omitempty" db:"period"`
+}
+
+// Subscription — модель подписки из базы данных
+type Subscription struct {
+	ID          int64     `json:"id" db:"id"`
+	TargetID    int64     `json:"target_id" db:"target_id"`
+	ContactInfo string    `json:"contact_info" db:"contact_info"`
+	Period      string    `json:"period,omitempty" db:"period"`
+	IsActive    int       `json:"is_active" db:"is_active"`
+	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+}
+
 // CheckRequest — структура для проверки списка адресов через API.
 type CheckRequest struct {
 	Addresses []string `json:"addresses"` // Список URL / IP / доменов для быстрой проверки
@@ -46,4 +64,8 @@ type CheckResponse struct {
 type CheckResultWithUrl struct {
 	CheckResult        // встраиваем базовую структуру
 	URL         string `json:"url" db:"url"` // добавляем поле с адресом
+}
+
+type SubscriptionListResponse struct {
+	Subscriptions []Subscription `json:"subscriptions"`
 }

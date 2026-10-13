@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -200,4 +201,109 @@ func (s *Store) GetAllHistory(ctx context.Context, period time.Duration) ([]doma
 	}
 
 	return history, nil
+}
+
+func (s *Store) CreateSubscription(req domain.SubscriptionRequest) ([]domain.Subscription, error) {
+	// Открываем транзикцию
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	// На случай ошибки делаем Rollback
+	defer tx.Rollback()
+	var createdSubs []domain.Subscription
+
+	// Определяем период по умолчанию
+	period := req.Period
+	if period == "" {
+		period = "1h"
+	}
+
+	// Обработка TargetIDs, если они переданы пачкой
+	for _, targetID := range req.TargetIDs {
+		sub, err := insertSubscription(tx, targetID, req.ContactInfo, period)
+		if err != nil {
+			return nil, err
+		}
+		createdSubs = append(createdSubs, sub)
+	}
+
+	// Обработка URLs, если они переданы пачкой
+	for _, targetURL := range req.URLs {
+		var targetID int64
+		targetQuery := `
+            INSERT INTO targets (url, status, last_check) 
+            VALUES (?, 'UNKNOWN', NULL)
+            ON CONFLICT(url) DO UPDATE SET url = url
+            RETURNING id;
+        `
+		err := tx.QueryRow(targetQuery, targetURL).Scan(&targetID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upsert target %s: %w", targetURL, err)
+		}
+
+		sub, err := insertSubscription(tx, targetID, req.ContactInfo, period)
+		if err != nil {
+			return nil, err
+		}
+		createdSubs = append(createdSubs, sub)
+	}
+	// Если всё прошло успешно, фиксируем транзакцию
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return createdSubs, nil
+}
+
+func (s *Store) GetDueTargets(ctx context.Context) ([]domain.Target, error) {
+	targetQuery := `SELECT id, url, status, last_check, created_at FROM targets`
+
+	rows, err := s.db.QueryContext(ctx, targetQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query due targets: %w", err)
+	}
+	defer rows.Close()
+
+	var targets []domain.Target
+	for rows.Next() {
+		var t domain.Target
+		// Сканируем поля из базы в структуру Target
+		if err := rows.Scan(&t.ID, &t.URL, &t.Interval, &t.Status, &t.LastCheck, &t.CreatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan target: %w", err)
+		}
+		targets = append(targets, t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	if targets == nil {
+		targets = []domain.Target{}
+	}
+
+	return targets, nil
+}
+
+// Вспомогательная функция для вставки самой подписки внутри транзакции
+func insertSubscription(tx *sql.Tx, targetID int64, contactInfo, period string) (domain.Subscription, error) {
+	var sub domain.Subscription
+	query := `
+        INSERT INTO subscriptions (target_id, contact_info, period)
+        VALUES (?, ?, ?)
+        RETURNING id, target_id, contact_info, period, is_active, created_at;
+    `
+	err := tx.QueryRow(query, targetID, contactInfo, period).Scan(
+		&sub.ID,
+		&sub.TargetID,
+		&sub.ContactInfo,
+		&sub.Period,
+		&sub.IsActive,
+		&sub.CreatedAt,
+	)
+	if err != nil {
+		return domain.Subscription{}, fmt.Errorf("failed to insert subscription: %w", err)
+	}
+	return sub, nil
 }
