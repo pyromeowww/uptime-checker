@@ -14,9 +14,9 @@ const (
 	schemaTargets = `CREATE TABLE IF NOT EXISTS targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     url TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,
-    last_check DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    last_check TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )`
 
 	schemaCheckResults = `CREATE TABLE IF NOT EXISTS check_results (
@@ -24,9 +24,9 @@ const (
     target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
     status_code INTEGER,
-    latency_ms INTEGER,
+    latency_ms TEXT,
     err_msg TEXT,
-    checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    checked_at TEXT DEFAULT CURRENT_TIMESTAMP
     )`
 
 	schemaSubscriptions = `CREATE TABLE IF NOT EXISTS subscriptions (
@@ -35,8 +35,9 @@ const (
     contact_info TEXT NOT NULL,
     period TEXT DEFAULT '1h',
     is_active INTEGER DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE,
+    UNIQUE(target_id, contact_info, period)
     )`
 
 	// Отдельный индекс для быстрого поиска истории по таргету

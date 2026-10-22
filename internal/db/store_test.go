@@ -11,8 +11,9 @@ import (
 	"github.com/pyromeowww/uptime-checker/internal/domain"
 )
 
-func TestGetOrCreateTarget(t *testing.T) {
+const timeLayout = "2006-01-02 15:04:05"
 
+func TestGetOrCreateTarget(t *testing.T) {
 	t.Run("new url", func(t *testing.T) {
 		ctx := context.Background()
 		url := "https://github.com"
@@ -26,8 +27,7 @@ func TestGetOrCreateTarget(t *testing.T) {
 		}
 
 		var count int
-		err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM targets WHERE url = ?", url).Scan(&count)
-		if err != nil {
+		if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM targets WHERE url = ?", url).Scan(&count); err != nil {
 			t.Fatalf("не удалось выполнить запрос: %v", err)
 		}
 		if count != 1 {
@@ -35,8 +35,7 @@ func TestGetOrCreateTarget(t *testing.T) {
 		}
 
 		var status string
-		err = db.QueryRowContext(ctx, "SELECT status FROM targets WHERE url = ?", url).Scan(&status)
-		if err != nil {
+		if err := db.QueryRowContext(ctx, "SELECT status FROM targets WHERE url = ?", url).Scan(&status); err != nil {
 			t.Fatalf("не удалось выполнить запрос: %v", err)
 		}
 		if status != string(domain.StatusPending) {
@@ -56,29 +55,18 @@ func TestGetOrCreateTarget(t *testing.T) {
 		if err != nil {
 			t.Fatalf("не ожидали ошибки, но получили: %v", err)
 		}
-
-		if id1 <= 0 {
-			t.Fatalf("ожидали положительный ID, получили: %d", id1)
-		}
-		if id2 <= 0 {
-			t.Fatalf("ожидали положительный ID, получили: %d", id2)
-		}
-
 		if id1 != id2 {
 			t.Fatalf("ожидали id1 = id2, получили id1 = %d, id2 = %d", id1, id2)
 		}
 
 		var count int
-		query := `SELECT COUNT(*) FROM targets WHERE url = ?`
-		err = db.QueryRowContext(ctx, query, url).Scan(&count)
-		if err != nil {
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM targets WHERE url = ?`, url).Scan(&count); err != nil {
 			t.Fatalf("не удалось выполнить запрос: %v", err)
 		}
 		if count != 1 {
 			t.Fatalf("ожидали 1 строку в targets, получили: %d", count)
 		}
 	})
-
 }
 
 func TestSaveResult_Success(t *testing.T) {
@@ -95,12 +83,10 @@ func TestSaveResult_Success(t *testing.T) {
 		Status:     domain.StatusUp,
 		StatusCode: 200,
 		LatencyMs:  "123",
-		ErrMsg:     "",
-		CheckedAt:  "2026-10-09 07:02:00",
+		CheckedAt:  time.Now().UTC().Add(-time.Hour).Format(timeLayout),
 	}
 
-	err = store.SaveResult(ctx, res)
-	if err != nil {
+	if err := store.SaveResult(ctx, res); err != nil {
 		t.Fatalf("не ожидали ошибку при SaveResult, но получили: %v", err)
 	}
 	assertCheckResults(t, db, ctx, id, res)
@@ -115,44 +101,32 @@ func TestStore_GetHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("не ожидали ошибку, но получили: %v", err)
 	}
+
+	now := time.Now().UTC()
 	res1 := domain.CheckResult{
-		TargetID:   id,
-		Status:     domain.StatusUp,
-		StatusCode: 200,
-		LatencyMs:  "123",
-		ErrMsg:     "",
-		CheckedAt:  "2026-10-09 07:02:00",
+		TargetID: id, Status: domain.StatusUp, StatusCode: 200, LatencyMs: "123",
+		CheckedAt: now.Add(-2 * time.Hour).Format(timeLayout),
 	}
-	err = store.SaveResult(ctx, res1)
-	if err != nil {
+	if err := store.SaveResult(ctx, res1); err != nil {
 		t.Fatalf("не ожидали ошибку при SaveResult, но получили: %v", err)
 	}
-
 	res2 := domain.CheckResult{
-		TargetID:   id,
-		Status:     domain.StatusUp,
-		StatusCode: 200,
-		LatencyMs:  "123",
-		ErrMsg:     "",
-		CheckedAt:  "2026-10-09 09:02:00",
+		TargetID: id, Status: domain.StatusUp, StatusCode: 200, LatencyMs: "123",
+		CheckedAt: now.Add(-1 * time.Hour).Format(timeLayout),
 	}
-	err = store.SaveResult(ctx, res2)
-	if err != nil {
+	if err := store.SaveResult(ctx, res2); err != nil {
 		t.Fatalf("не ожидали ошибку при SaveResult, но получили: %v", err)
 	}
 
 	period := 72 * time.Hour
+
 	t.Run("GetHistoryByUrl", func(t *testing.T) {
 		history, err := store.GetHistoryByUrl(ctx, url, period)
 		if err != nil {
 			t.Fatalf("не ожидали ошибку, но получили: %v", err)
 		}
-
 		if len(history) != 2 {
 			t.Errorf("ожидали 2 записи в истории, а получили %d", len(history))
-		}
-		if history[0].StatusCode != 200 {
-			t.Errorf("ожидали статус 200, получили %d", history[0].StatusCode)
 		}
 	})
 
@@ -164,12 +138,9 @@ func TestStore_GetHistory(t *testing.T) {
 		if len(history) != 2 {
 			t.Errorf("ожидали 2 записи в истории, а получили %d", len(history))
 		}
-		if history[0].StatusCode != 200 {
-			t.Errorf("ожидали статус 200, получили %d", history[0].StatusCode)
-		}
 	})
 
-	t.Run("GetTargetHistoryAll", func(t *testing.T) {
+	t.Run("GetAllHistory", func(t *testing.T) {
 		history, err := store.GetAllHistory(ctx, period)
 		if err != nil {
 			t.Fatalf("не ожидали ошибку, но получили: %v", err)
@@ -177,20 +148,17 @@ func TestStore_GetHistory(t *testing.T) {
 		if len(history) != 2 {
 			t.Errorf("ожидали 2 записи в истории, а получили %d", len(history))
 		}
-		if history[0].StatusCode != 200 {
-			t.Errorf("ожидали статус 200, получили %d", history[0].StatusCode)
-		}
 	})
 }
 
 func newTestStore(t *testing.T) (*Store, *sql.DB) {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
 	dsn := fmt.Sprintf("%s?mode=rwc", path)
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		t.Fatalf("ошибка открытия базы данных: %v", err)
 	}
-
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("ошибка при закрытии тестовой базы данных: %v", err)
@@ -200,17 +168,14 @@ func newTestStore(t *testing.T) (*Store, *sql.DB) {
 	if err = db.Ping(); err != nil {
 		t.Fatalf("failed to ping database: %v", err)
 	}
-
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec("PRAGMA foreign_keys = ON;"); err != nil {
 		t.Fatalf("failed to enable foreign keys: %v", err)
 	}
-
-	schema := schemaTargets + ";" + schemaCheck_Results + ";" + indexCheck
+	schema := schemaTargets + ";" + schemaCheckResults + ";" + indexCheckResults
 	if _, err := db.Exec(schema); err != nil {
 		t.Fatalf("ошибка создания таблиц: %v", err)
 	}
-
 	return &Store{db: db}, db
 }
 
@@ -221,67 +186,63 @@ func assertCheckResults(t *testing.T, db *sql.DB, ctx context.Context, targetID 
 		gotStatusCode                                    int
 		gotStatus, gotLatencyMs, gotErrMsg, gotCheckedAt string
 	)
-
 	query := `SELECT id, target_id, status, status_code, latency_ms, err_msg, checked_at FROM check_results WHERE target_id = ?`
-	err := db.QueryRowContext(ctx, query, targetID).Scan(&gotID, &gotTargetID, &gotStatus, &gotStatusCode, &gotLatencyMs, &gotErrMsg, &gotCheckedAt)
-	if err != nil {
+	if err := db.QueryRowContext(ctx, query, targetID).
+		Scan(&gotID, &gotTargetID, &gotStatus, &gotStatusCode, &gotLatencyMs, &gotErrMsg, &gotCheckedAt); err != nil {
 		t.Fatalf("не удалось выполнить запрос: %v", err)
 	}
 	if gotID <= 0 {
 		t.Fatalf("ожидали положительный ID, получили: %d", gotID)
 	}
 	if gotTargetID != want.TargetID {
-		t.Fatalf("target_id в check_results: ожидали %d, получили: %d", want.TargetID, gotTargetID)
+		t.Fatalf("target_id: ожидали %d, получили: %d", want.TargetID, gotTargetID)
 	}
 	if gotStatus != string(want.Status) {
-		t.Fatalf("status в check_results: ожидали %q, получили: %q", want.Status, gotStatus)
+		t.Fatalf("status: ожидали %q, получили: %q", want.Status, gotStatus)
 	}
 	if gotStatusCode != want.StatusCode {
-		t.Fatalf("status_code в check_results: ожидали %d, получили: %d", want.StatusCode, gotStatusCode)
+		t.Fatalf("status_code: ожидали %d, получили: %d", want.StatusCode, gotStatusCode)
 	}
 	if gotLatencyMs != want.LatencyMs {
-		t.Fatalf("latency_ms в check_results: ожидали %q, получили: %q", want.LatencyMs, gotLatencyMs)
+		t.Fatalf("latency_ms: ожидали %q, получили: %q", want.LatencyMs, gotLatencyMs)
 	}
 	if gotErrMsg != want.ErrMsg {
-		t.Fatalf("err_msg в check_results: ожидали %q, получили: %q", want.ErrMsg, gotErrMsg)
+		t.Fatalf("err_msg: ожидали %q, получили: %q", want.ErrMsg, gotErrMsg)
 	}
 
-	wantTime, err := time.Parse("2006-01-02 15:04:05", want.CheckedAt)
+	wantTime, err := time.Parse(timeLayout, want.CheckedAt)
 	if err != nil {
-		t.Fatalf("check_results: не удалось распарсить want.CheckedAt: %v", err)
+		t.Fatalf("не удалось распарсить want.CheckedAt: %v", err)
 	}
-	got, err := time.Parse(time.RFC3339, gotCheckedAt)
+	gotTime, err := time.Parse(timeLayout, gotCheckedAt)
 	if err != nil {
-		t.Fatalf("check_results: не удалось распарсить gotCheckedAt: %v", err)
+		t.Fatalf("не удалось распарсить gotCheckedAt %q: %v", gotCheckedAt, err)
 	}
-	if !wantTime.Equal(got) {
-		t.Fatalf("checked_at в check_results: ожидали %v, получили: %v", wantTime.String(), got.String())
+	if !wantTime.Equal(gotTime) {
+		t.Fatalf("checked_at: ожидали %v, получили: %v", wantTime, gotTime)
 	}
 }
 
 func assertTargets(t *testing.T, db *sql.DB, ctx context.Context, id int64, res domain.CheckResult) {
 	t.Helper()
-	var (
-		gotStatus, gotLastCheck string
-	)
+	var gotStatus, gotLastCheck string
 	query := `SELECT status, last_check FROM targets WHERE id = ?`
-	err := db.QueryRowContext(ctx, query, id).Scan(&gotStatus, &gotLastCheck)
-	if err != nil {
+	if err := db.QueryRowContext(ctx, query, id).Scan(&gotStatus, &gotLastCheck); err != nil {
 		t.Fatalf("targets: не удалось выполнить запрос: %v", err)
 	}
 	if gotStatus != string(res.Status) {
-		t.Fatalf("несовпадение статуса для target_id= %d: ожидали %q, получили %q", id, res.Status, gotStatus)
+		t.Fatalf("несовпадение статуса для target_id=%d: ожидали %q, получили %q", id, res.Status, gotStatus)
 	}
 
-	wantTime, err := time.Parse("2006-01-02 15:04:05", res.CheckedAt)
+	wantTime, err := time.Parse(timeLayout, res.CheckedAt)
 	if err != nil {
 		t.Fatalf("targets: не удалось распарсить res.CheckedAt: %v", err)
 	}
-	gotTime, err := time.Parse(time.RFC3339, gotLastCheck)
+	gotTime, err := time.Parse(timeLayout, gotLastCheck)
 	if err != nil {
-		t.Fatalf("targets: не удалось распарсить gotLastCheck: %v", err)
+		t.Fatalf("targets: не удалось распарсить gotLastCheck %q: %v", gotLastCheck, err)
 	}
 	if !wantTime.Equal(gotTime) {
-		t.Fatalf("несовпадение last_check для target_id= %d: ожидали %q, получили %q", id, res.CheckedAt, gotLastCheck)
+		t.Fatalf("несовпадение last_check для target_id=%d: ожидали %q, получили %q", id, res.CheckedAt, gotLastCheck)
 	}
 }

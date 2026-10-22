@@ -1,10 +1,10 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync"
 	"time"
@@ -37,11 +37,12 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "JSON deserialization error: "+err.Error())
 		return
 	}
-
 	if len(req.Addresses) == 0 {
 		writeError(w, http.StatusBadRequest, "addresses list is empty")
 		return
 	}
+
+	ctx := r.Context()
 
 	var (
 		results  []domain.CheckResult
@@ -56,9 +57,6 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 		go func(url string) {
 			defer wg.Done()
 
-			// Используем Background, так как горутина асинхронная
-			ctx := context.Background()
-
 			targetID, err := h.store.GetOrCreateTarget(ctx, url)
 			if err != nil {
 				mu.Lock()
@@ -67,7 +65,6 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 				mu.Unlock()
 				return
 			}
-			log.Printf("URL: %s -> Assigned targetID: %d", url, targetID)
 
 			checkResult, err := h.checker.Check(url)
 			if err != nil {
@@ -75,10 +72,6 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 				hasError = true
 				errStr = "Check error: " + err.Error()
 				mu.Unlock()
-				return
-			}
-
-			if len(checkResult) == 0 {
 				return
 			}
 			checkRes := checkResult[0]
@@ -97,20 +90,14 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 			mu.Unlock()
 		}(addr)
 	}
-
 	wg.Wait()
 
-	// Если во время проверки в горутинах произошла ошибка, возвращаем 500
 	if hasError {
 		writeError(w, http.StatusInternalServerError, errStr)
 		return
 	}
 
-	res := domain.CheckResponse{
-		Results: results,
-	}
-
-	writeJSON(w, http.StatusOK, res)
+	writeJSON(w, http.StatusOK, domain.CheckResponse{Results: results})
 }
 
 func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +176,69 @@ func (h *Handler) GetAllHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, history)
+}
+
+func (h *Handler) CreateTargetHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		return
+	}
+
+	// 1. Декодируем тело запроса
+	var req domain.SubscriptionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "JSON deserialization error: "+err.Error())
+		return
+	}
+
+	if len(req.URLs) == 0 && len(req.TargetIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one URL or target_id must be provided")
+		return
+	}
+
+	// Определяем период проверки
+	periodStr := req.Period
+	if periodStr == "" {
+		periodStr = "5m" // Дефолтное значение
+	}
+
+	period, err := time.ParseDuration(periodStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid period format: use format like '1m', '5m', '1h'")
+		return
+	}
+
+	minPeriod := 1 * time.Minute
+	if period < minPeriod {
+		writeError(w, http.StatusBadRequest, "interval cannot be less than 1 minute")
+		return
+	}
+
+	// 2. Валидация каждого URL на корректность
+	for _, rawURL := range req.URLs {
+		parsedURL, err := url.ParseRequestURI(rawURL)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+			writeError(w, http.StatusBadRequest, "invalid URL format: "+rawURL)
+			return
+		}
+	}
+
+	// 3. Валидация каждого ID (должен быть больше 0)
+	for _, id := range req.TargetIDs {
+		if id <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid target_id: must be greater than zero")
+			return
+		}
+	}
+
+	// 4. Передаем контекст r.Context() и запрос в хранилище
+	res, err := h.store.CreateSubscriptions(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to create subscription: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, res)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

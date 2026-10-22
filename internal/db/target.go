@@ -60,12 +60,12 @@ func (s *Store) SaveResult(ctx context.Context, res domain.CheckResult) error {
 }
 
 func (s *Store) GetTargetHistory(ctx context.Context, targetID int64, period time.Duration) ([]domain.CheckResult, error) {
-	now := time.Now().UTC()
+	now := time.Now()
 	cutoff := now.Add(-period).Format("2006-01-02 15:04:05")
 	query := `SELECT target_id, status, status_code, latency_ms, err_msg, checked_at 
-		FROM check_results 
-		WHERE target_id = ? AND checked_at >= ? 
-		ORDER BY checked_at DESC`
+       FROM check_results 
+       WHERE target_id = ? AND checked_at >= ? 
+       ORDER BY checked_at DESC`
 	rows, err := s.db.QueryContext(ctx, query, targetID, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving rows: %w", err)
@@ -96,7 +96,7 @@ func (s *Store) GetTargetHistory(ctx context.Context, targetID int64, period tim
 }
 
 func (s *Store) DeleteOldResults(ctx context.Context, retentionPeriod time.Duration) (int64, error) {
-	now := time.Now().UTC()
+	now := time.Now()
 	cutoff := now.Add(-retentionPeriod).Format("2006-01-02 15:04:05")
 	query := `DELETE FROM check_results WHERE checked_at < ?`
 	res, err := s.db.ExecContext(ctx, query, cutoff)
@@ -112,7 +112,7 @@ func (s *Store) DeleteOldResults(ctx context.Context, retentionPeriod time.Durat
 }
 
 func (s *Store) GetHistoryByUrl(ctx context.Context, url string, period time.Duration) ([]domain.CheckResult, error) {
-	now := time.Now().UTC()
+	now := time.Now()
 	cutoff := now.Add(-period).Format("2006-01-02 15:04:05")
 
 	query := `
@@ -149,7 +149,6 @@ func (s *Store) GetHistoryByUrl(ctx context.Context, url string, period time.Dur
 		return nil, fmt.Errorf("rows iteration error: %w", err)
 	}
 
-	// Возвращаем пустой слайс вместо nil, чтобы в JSON красиво отдавался []
 	if history == nil {
 		history = []domain.CheckResult{}
 	}
@@ -158,7 +157,7 @@ func (s *Store) GetHistoryByUrl(ctx context.Context, url string, period time.Dur
 }
 
 func (s *Store) GetAllHistory(ctx context.Context, period time.Duration) ([]domain.CheckResultWithUrl, error) {
-	now := time.Now().UTC()
+	now := time.Now()
 	cutoff := now.Add(-period).Format("2006-01-02 15:04:05")
 
 	query := `
@@ -203,107 +202,153 @@ func (s *Store) GetAllHistory(ctx context.Context, period time.Duration) ([]doma
 	return history, nil
 }
 
-func (s *Store) CreateSubscription(req domain.SubscriptionRequest) ([]domain.Subscription, error) {
-	// Открываем транзикцию
-	tx, err := s.db.Begin()
+// CreateSubscriptions сохраняет сайты/ID и подписки.
+func (s *Store) CreateSubscriptions(ctx context.Context, req domain.SubscriptionRequest) ([]domain.Subscription, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	// На случай ошибки делаем Rollback
 	defer tx.Rollback()
-	var createdSubs []domain.Subscription
 
-	// Определяем период по умолчанию
 	period := req.Period
 	if period == "" {
-		period = "1h"
+		period = "1m"
 	}
 
-	// Обработка TargetIDs, если они переданы пачкой
-	for _, targetID := range req.TargetIDs {
-		sub, err := insertSubscription(tx, targetID, req.ContactInfo, period)
+	targetIDs := make([]int64, 0, len(req.URLs)+len(req.TargetIDs))
+
+	for _, rawURL := range req.URLs {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO targets (url, status) VALUES (?, ?)
+			ON CONFLICT(url) DO NOTHING`,
+			rawURL, domain.StatusPending,
+		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to insert target %s: %w", rawURL, err)
 		}
-		createdSubs = append(createdSubs, sub)
-	}
 
-	// Обработка URLs, если они переданы пачкой
-	for _, targetURL := range req.URLs {
 		var targetID int64
-		targetQuery := `
-            INSERT INTO targets (url, status, last_check) 
-            VALUES (?, 'UNKNOWN', NULL)
-            ON CONFLICT(url) DO UPDATE SET url = url
-            RETURNING id;
-        `
-		err := tx.QueryRow(targetQuery, targetURL).Scan(&targetID)
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM targets WHERE url = ?`, rawURL).Scan(&targetID); err != nil {
+			return nil, fmt.Errorf("failed to get target ID for %s: %w", rawURL, err)
+		}
+		targetIDs = append(targetIDs, targetID)
+	}
+
+	for _, id := range req.TargetIDs {
+		var exists int
+		err := tx.QueryRowContext(ctx, `SELECT 1 FROM targets WHERE id = ?`, id).Scan(&exists)
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("target with id %d does not exist", id)
+		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to upsert target %s: %w", targetURL, err)
+			return nil, fmt.Errorf("failed to check target %d: %w", id, err)
+		}
+		targetIDs = append(targetIDs, id)
+	}
+
+	var subscriptions []domain.Subscription
+	for _, targetID := range targetIDs {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO subscriptions (target_id, contact_info, period, is_active)
+			VALUES (?, ?, ?, 1)
+			ON CONFLICT(target_id, contact_info, period) DO UPDATE SET is_active = 1`,
+			targetID, req.ContactInfo, period,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to upsert subscription: %w", err)
 		}
 
-		sub, err := insertSubscription(tx, targetID, req.ContactInfo, period)
+		var sub domain.Subscription
+		err = tx.QueryRowContext(ctx, `
+			SELECT id, target_id, contact_info, period, is_active, created_at
+			FROM subscriptions
+			WHERE target_id = ? AND contact_info = ? AND period = ?`,
+			targetID, req.ContactInfo, period,
+		).Scan(&sub.ID, &sub.TargetID, &sub.ContactInfo, &sub.Period, &sub.IsActive, &sub.CreatedAt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to fetch subscription: %w", err)
 		}
-		createdSubs = append(createdSubs, sub)
+		subscriptions = append(subscriptions, sub)
 	}
-	// Если всё прошло успешно, фиксируем транзакцию
+
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("failed to commit transaction: %w", err)
 	}
-
-	return createdSubs, nil
+	return subscriptions, nil
 }
 
+// GetDueTargets возвращает таргеты, которым пора на проверку.
 func (s *Store) GetDueTargets(ctx context.Context) ([]domain.Target, error) {
-	targetQuery := `SELECT id, url, status, last_check, created_at FROM targets`
+	const timeLayout = "2006-01-02 15:04:05"
 
-	rows, err := s.db.QueryContext(ctx, targetQuery)
+	query := `
+		SELECT t.id, t.url, t.status, t.last_check, t.created_at, s.period
+		FROM targets t
+		JOIN subscriptions s ON t.id = s.target_id
+		WHERE s.is_active = 1
+	`
+	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query due targets: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
 
-	var targets []domain.Target
+	type targetInfo struct {
+		target    domain.Target
+		minPeriod time.Duration
+	}
+	infos := make(map[int64]*targetInfo)
+	var order []int64
+
 	for rows.Next() {
-		var t domain.Target
-		// Сканируем поля из базы в структуру Target
-		if err := rows.Scan(&t.ID, &t.URL, &t.Interval, &t.Status, &t.LastCheck, &t.CreatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan target: %w", err)
+		var (
+			t            domain.Target
+			lastCheckStr sql.NullString
+			createdAtStr sql.NullString // ← вот это
+			periodStr    string
+		)
+		if err := rows.Scan(&t.ID, &t.URL, &t.Status, &lastCheckStr, &createdAtStr, &periodStr); err != nil {
+			return nil, err
 		}
-		targets = append(targets, t)
-	}
 
+		if createdAtStr.Valid && createdAtStr.String != "" {
+			if ca, err := time.ParseInLocation(timeLayout, createdAtStr.String, time.UTC); err == nil {
+				t.CreatedAt = ca
+			}
+		}
+
+		period, err := time.ParseDuration(periodStr)
+		if err != nil || period <= 0 {
+			period = time.Minute
+		}
+
+		info, ok := infos[t.ID]
+		if !ok {
+			info = &targetInfo{target: t, minPeriod: period}
+			infos[t.ID] = info
+			order = append(order, t.ID)
+		}
+		if period < info.minPeriod {
+			info.minPeriod = period
+		}
+
+		if lastCheckStr.Valid && lastCheckStr.String != "" {
+			if lc, err := time.ParseInLocation(timeLayout, lastCheckStr.String, time.Local); err == nil {
+				info.target.LastCheck = lc
+			}
+		}
+	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows iteration error: %w", err)
+		return nil, err
 	}
 
-	if targets == nil {
-		targets = []domain.Target{}
+	now := time.Now().UTC()
+	due := make([]domain.Target, 0, len(order))
+	for _, id := range order {
+		info := infos[id]
+		if info.target.LastCheck.IsZero() || now.Sub(info.target.LastCheck) >= info.minPeriod {
+			due = append(due, info.target)
+		}
 	}
-
-	return targets, nil
-}
-
-// Вспомогательная функция для вставки самой подписки внутри транзакции
-func insertSubscription(tx *sql.Tx, targetID int64, contactInfo, period string) (domain.Subscription, error) {
-	var sub domain.Subscription
-	query := `
-        INSERT INTO subscriptions (target_id, contact_info, period)
-        VALUES (?, ?, ?)
-        RETURNING id, target_id, contact_info, period, is_active, created_at;
-    `
-	err := tx.QueryRow(query, targetID, contactInfo, period).Scan(
-		&sub.ID,
-		&sub.TargetID,
-		&sub.ContactInfo,
-		&sub.Period,
-		&sub.IsActive,
-		&sub.CreatedAt,
-	)
-	if err != nil {
-		return domain.Subscription{}, fmt.Errorf("failed to insert subscription: %w", err)
-	}
-	return sub, nil
+	return due, nil
 }
