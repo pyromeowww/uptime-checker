@@ -14,29 +14,30 @@ const (
 	schemaTargets = `CREATE TABLE IF NOT EXISTS targets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     url TEXT NOT NULL UNIQUE,
-    status TEXT NOT NULL,
-    last_check DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    status TEXT NOT NULL DEFAULT 'PENDING',
+    last_check TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`
 
 	schemaCheckResults = `CREATE TABLE IF NOT EXISTS check_results (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    target_id INTEGER REFERENCES targets(id) ON DELETE CASCADE,
+    target_id INTEGER NOT NULL REFERENCES targets(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
     status_code INTEGER,
-    latency_ms INTEGER,
+    latency_ms TEXT,
     err_msg TEXT,
-    checked_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`
 
 	schemaSubscriptions = `CREATE TABLE IF NOT EXISTS subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     target_id INTEGER NOT NULL,
     contact_info TEXT NOT NULL,
-    period TEXT DEFAULT '1h',
-    is_active INTEGER DEFAULT 1,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE
+    period TEXT NOT NULL DEFAULT '1m',
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (target_id) REFERENCES targets(id) ON DELETE CASCADE,
+    UNIQUE(target_id, contact_info, period)
     )`
 
 	// Отдельный индекс для быстрого поиска истории по таргету
@@ -44,6 +45,9 @@ const (
 
 	// Отдельный индекс для быстрого поиска подписок по таргету (нужен воркеру)
 	indexSubscriptions = `CREATE INDEX IF NOT EXISTS idx_subscriptions_target_id ON subscriptions(target_id);`
+
+	// Индекс для быстрой очистки старых результатов (DeleteOldResults)
+	indexCheckResultsCheckedAt = `CREATE INDEX IF NOT EXISTS idx_check_results_checked_at ON check_results(checked_at);`
 )
 
 type Store struct {
@@ -81,8 +85,7 @@ func New(cfg *config.Config) (*Store, error) {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}
 
-	schema := schemaTargets + ";" + schemaCheckResults + ";" + indexCheckResults + ";" + schemaSubscriptions + ";" + indexSubscriptions
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(fullSchema()); err != nil {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
@@ -97,4 +100,10 @@ func (s *Store) Close() error {
 		return s.db.Close()
 	}
 	return nil
+}
+
+func fullSchema() string {
+	return schemaTargets + ";" +
+		schemaCheckResults + ";" + indexCheckResults + ";" + indexCheckResultsCheckedAt + ";" +
+		schemaSubscriptions + ";" + indexSubscriptions
 }

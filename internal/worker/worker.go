@@ -22,7 +22,7 @@ func NewWorker(store *db.Store, interval time.Duration) *Worker {
 		interval = 5 * time.Minute
 	}
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second}
 
 	return &Worker{
 		store:    store,
@@ -32,10 +32,13 @@ func NewWorker(store *db.Store, interval time.Duration) *Worker {
 }
 
 func (w *Worker) Start(ctx context.Context) {
+	log.Printf("Worker started with interval: %v", w.interval)
+
+	// Сразу запускаем одну проверку при старте, не дожидаясь первого тика
+	w.RunCheckCycle(ctx)
+
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
-
-	log.Printf("Worker started with interval: %v", w.interval)
 
 	for {
 		select {
@@ -106,8 +109,11 @@ func (w *Worker) checkTarget(ctx context.Context, target domain.Target) {
 		return
 	}
 
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) UptimeChecker/1.0")
+
 	var res domain.CheckResult
 	res.TargetID = target.ID
+
 	res.CheckedAt = start.Format("2006-01-02 15:04:05")
 
 	resp, err := w.client.Do(req)

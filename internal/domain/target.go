@@ -43,12 +43,12 @@ type SubscriptionRequest struct {
 
 // Subscription — модель подписки из базы данных
 type Subscription struct {
-	ID          int64     `json:"id" db:"id"`
-	TargetID    int64     `json:"target_id" db:"target_id"`
-	ContactInfo string    `json:"contact_info" db:"contact_info"`
-	Period      string    `json:"period,omitempty" db:"period"`
-	IsActive    int       `json:"is_active" db:"is_active"`
-	CreatedAt   time.Time `json:"created_at" db:"created_at"`
+	ID          int64  `json:"id" db:"id"`
+	TargetID    int64  `json:"target_id" db:"target_id"`
+	ContactInfo string `json:"contact_info" db:"contact_info"`
+	Period      string `json:"period,omitempty" db:"period"`
+	IsActive    int    `json:"is_active" db:"is_active"`
+	CreatedAt   string `json:"created_at" db:"created_at"`
 }
 
 // CheckRequest — структура для проверки списка адресов через API.
@@ -66,6 +66,11 @@ type CheckResultWithUrl struct {
 	URL         string `json:"url" db:"url"` // добавляем поле с адресом
 }
 
+type SubscriptionWithURL struct {
+	Subscription
+	URL string `json:"url"`
+}
+
 type SubscriptionListResponse struct {
-	Subscriptions []Subscription `json:"subscriptions"`
+	Subscriptions []SubscriptionWithURL `json:"subscriptions"`
 }

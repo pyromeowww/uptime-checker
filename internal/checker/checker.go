@@ -10,12 +10,10 @@ import (
 	"github.com/pyromeowww/uptime-checker/internal/domain"
 )
 
-// Checker представляет собой сервис для проверки доступности сайтов.
 type Checker struct {
 	client *http.Client
 }
 
-// NewChecker создаёт новый экземпляр Checker с предустановленным таймаутом HTTP-клиента.
 func NewChecker() *Checker {
 	return &Checker{
 		client: &http.Client{
@@ -27,25 +25,18 @@ func NewChecker() *Checker {
 	}
 }
 
-// Check выполняет проверку одного или нескольких сайтов.
 func (c *Checker) Check(address ...string) ([]domain.CheckResult, error) {
 	switch len(address) {
 	case 0:
 		return []domain.CheckResult{}, errors.New("address is empty")
 	case 1:
-		url := address[0]
-		res, err := c.checkSingle(url)
-		if err != nil {
-			return nil, err
-		}
-		return []domain.CheckResult{res}, nil
+		return []domain.CheckResult{c.checkSingle(address[0])}, nil
 	default:
-		return c.checkParallel(address)
+		return c.checkParallel(address), nil
 	}
 }
 
-// normalizeURL приводит URL к единому формату
-func normalizeURL(rawAdr string) string {
+func NormalizeURL(rawAdr string) string {
 	rawAdr = strings.TrimSpace(strings.ToLower(rawAdr))
 	if !strings.HasPrefix(rawAdr, "http://") && !strings.HasPrefix(rawAdr, "https://") {
 		return "http://" + rawAdr
@@ -53,9 +44,8 @@ func normalizeURL(rawAdr string) string {
 	return rawAdr
 }
 
-// checkSingle выполняет HTTP GET-запрос к указанному URL и измеряет время отклика.
-func (c *Checker) checkSingle(url string) (domain.CheckResult, error) {
-	url = normalizeURL(url)
+func (c *Checker) checkSingle(url string) domain.CheckResult {
+	url = NormalizeURL(url)
 	start := time.Now()
 	formattedTime := start.Format("2006-01-02 15:04:05")
 
@@ -66,7 +56,7 @@ func (c *Checker) checkSingle(url string) (domain.CheckResult, error) {
 			ErrMsg:    err.Error(),
 			LatencyMs: time.Since(start).Round(time.Millisecond).String(),
 			CheckedAt: formattedTime,
-		}, nil
+		}
 	}
 	defer resp.Body.Close()
 
@@ -80,24 +70,19 @@ func (c *Checker) checkSingle(url string) (domain.CheckResult, error) {
 		StatusCode: resp.StatusCode,
 		LatencyMs:  latencyStr,
 		CheckedAt:  formattedTime,
-	}, nil
+	}
 }
 
-// checkParallel выполняет параллельную проверку списка URL с использованием горутин и sync.WaitGroup.
-func (c *Checker) checkParallel(address []string) ([]domain.CheckResult, error) {
+func (c *Checker) checkParallel(address []string) []domain.CheckResult {
 	results := make([]domain.CheckResult, len(address))
 	var wg sync.WaitGroup
-
 	for i, url := range address {
 		wg.Add(1)
 		go func(idx int, targetURL string) {
 			defer wg.Done()
-
-			cleanURL := normalizeURL(targetURL)
-			res, _ := c.checkSingle(cleanURL)
-			results[idx] = res
+			results[idx] = c.checkSingle(targetURL)
 		}(i, url)
 	}
 	wg.Wait()
-	return results, nil
+	return results
 }
