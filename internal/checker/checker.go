@@ -58,7 +58,7 @@ func (c *Checker) checkSingle(url string) domain.CheckResult {
 			CheckedAt: formattedTime,
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	latencyStr := time.Since(start).Round(time.Millisecond).String()
 	status := domain.StatusUp
