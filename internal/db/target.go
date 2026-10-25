@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,7 +33,7 @@ func (s *Store) SaveResult(ctx context.Context, res domain.CheckResult) error {
 	if err != nil {
 		return fmt.Errorf("transaction error: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	queryInsert := `
     INSERT INTO check_results (target_id, status, status_code, latency_ms, err_msg, checked_at) 
@@ -72,8 +73,8 @@ func (s *Store) GetTargetHistory(ctx context.Context, targetID int64, period tim
 		return nil, fmt.Errorf("error retrieving rows: %w", err)
 	}
 
-	defer rows.Close()
-	results := []domain.CheckResult{}
+	defer func() { _ = rows.Close() }()
+	results := make([]domain.CheckResult, 0)
 	for rows.Next() {
 		var res domain.CheckResult
 		err := rows.Scan(
@@ -128,7 +129,7 @@ func (s *Store) GetHistoryByURL(ctx context.Context, url string, period time.Dur
 	if err != nil {
 		return nil, fmt.Errorf("failed to query history: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var history []domain.CheckResult
 	for rows.Next() {
@@ -173,7 +174,7 @@ func (s *Store) GetAllHistory(ctx context.Context, period time.Duration) ([]doma
 	if err != nil {
 		return nil, fmt.Errorf("failed to query all history: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var history []domain.CheckResultWithUrl
 	for rows.Next() {
@@ -209,7 +210,7 @@ func (s *Store) CreateSubscriptions(ctx context.Context, req domain.Subscription
 	if err != nil {
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	period := req.Period
 	if period == "" {
@@ -234,11 +235,10 @@ func (s *Store) CreateSubscriptions(ctx context.Context, req domain.Subscription
 		}
 		targetIDs = append(targetIDs, targetID)
 	}
-
 	for _, id := range req.TargetIDs {
 		var exists int
 		err := tx.QueryRowContext(ctx, `SELECT 1 FROM targets WHERE id = ?`, id).Scan(&exists)
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, fmt.Errorf("target with id %d does not exist", id)
 		}
 		if err != nil {
@@ -292,7 +292,7 @@ func (s *Store) GetDueTargets(ctx context.Context) ([]domain.Target, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	type targetInfo struct {
 		target    domain.Target
@@ -367,7 +367,7 @@ func (s *Store) GetAllSubscriptions(ctx context.Context, limit, offset int) ([]d
 	if err != nil {
 		return nil, fmt.Errorf("failed to query subscriptions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	subs := make([]domain.SubscriptionWithURL, 0)
 	for rows.Next() {

@@ -128,7 +128,7 @@ func (w *Worker) checkTarget(ctx context.Context, target domain.Target) {
 		}
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Успешный ответ
 	res.LatencyMs = time.Since(start).Round(time.Millisecond).String()
