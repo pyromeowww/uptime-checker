@@ -66,6 +66,11 @@ type CheckResultWithUrl struct {
 	URL         string `json:"url" db:"url"` // добавляем поле с адресом
 }
 
+type SubscriptionWithURL struct {
+	Subscription
+	URL string `json:"url"`
+}
+
 type SubscriptionListResponse struct {
-	Subscriptions []Subscription `json:"subscriptions"`
+	Subscriptions []SubscriptionWithURL `json:"subscriptions"`
 }

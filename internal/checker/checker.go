@@ -36,7 +36,7 @@ func (c *Checker) Check(address ...string) ([]domain.CheckResult, error) {
 	}
 }
 
-func normalizeURL(rawAdr string) string {
+func NormalizeURL(rawAdr string) string {
 	rawAdr = strings.TrimSpace(strings.ToLower(rawAdr))
 	if !strings.HasPrefix(rawAdr, "http://") && !strings.HasPrefix(rawAdr, "https://") {
 		return "http://" + rawAdr
@@ -45,7 +45,7 @@ func normalizeURL(rawAdr string) string {
 }
 
 func (c *Checker) checkSingle(url string) domain.CheckResult {
-	url = normalizeURL(url)
+	url = NormalizeURL(url)
 	start := time.Now()
 	formattedTime := start.Format("2006-01-02 15:04:05")
 

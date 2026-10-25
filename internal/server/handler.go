@@ -2,11 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pyromeowww/uptime-checker/internal/checker"
@@ -26,9 +28,15 @@ func NewHandler(chk *checker.Checker, store *db.Store) *Handler {
 	}
 }
 
+const (
+	checkTimeLayout = "2006-01-02 15:04:05"
+	defaultLimit    = 100
+	maxLimit        = 1000
+)
+
 func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -44,56 +52,70 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	results := make([]domain.CheckResult, len(req.Addresses))
+
 	var (
-		results  []domain.CheckResult
-		mu       sync.Mutex
-		wg       sync.WaitGroup
-		hasError bool
-		errStr   string
+		wg     sync.WaitGroup
+		failed atomic.Int32
 	)
 
-	for _, addr := range req.Addresses {
+	for i, addr := range req.Addresses {
 		wg.Add(1)
-		go func(url string) {
+		go func(idx int, rawURL string) {
 			defer wg.Done()
 
-			targetID, err := h.store.GetOrCreateTarget(ctx, url)
+			// Нормализуем один раз, чтобы в targets не плодились дубликаты
+			u := checker.NormalizeURL(rawURL)
+			now := time.Now().Format(checkTimeLayout)
+
+			targetID, err := h.store.GetOrCreateTarget(ctx, u)
 			if err != nil {
-				mu.Lock()
-				hasError = true
-				errStr = "Failed to target DB: " + err.Error()
-				mu.Unlock()
+				failed.Add(1)
+				results[idx] = domain.CheckResult{
+					Status:    domain.StatusDown,
+					ErrMsg:    "failed to get target from DB: " + err.Error(),
+					CheckedAt: now,
+				}
 				return
 			}
 
-			checkResult, err := h.checker.Check(url)
+			checkResult, err := h.checker.Check(u)
 			if err != nil {
-				mu.Lock()
-				hasError = true
-				errStr = "Check error: " + err.Error()
-				mu.Unlock()
+				failed.Add(1)
+				results[idx] = domain.CheckResult{
+					TargetID:  targetID,
+					Status:    domain.StatusDown,
+					ErrMsg:    "check error: " + err.Error(),
+					CheckedAt: now,
+				}
 				return
 			}
+			if len(checkResult) == 0 {
+				failed.Add(1)
+				results[idx] = domain.CheckResult{
+					TargetID:  targetID,
+					Status:    domain.StatusDown,
+					ErrMsg:    "check returned no result",
+					CheckedAt: now,
+				}
+				return
+			}
+
 			checkRes := checkResult[0]
 			checkRes.TargetID = targetID
 
 			if err := h.store.SaveResult(ctx, checkRes); err != nil {
-				mu.Lock()
-				hasError = true
-				errStr = "Failed to save result: " + err.Error()
-				mu.Unlock()
-				return
+				checkRes.ErrMsg = "failed to save result: " + err.Error()
 			}
 
-			mu.Lock()
-			results = append(results, checkRes)
-			mu.Unlock()
-		}(addr)
+			results[idx] = checkRes
+		}(i, addr)
 	}
 	wg.Wait()
 
-	if hasError {
-		writeError(w, http.StatusInternalServerError, errStr)
+	// Полный провал: ни одна проверка не удалась.
+	if failed.Load() == int32(len(req.Addresses)) {
+		writeError(w, http.StatusInternalServerError, "all checks failed")
 		return
 	}
 
@@ -102,7 +124,7 @@ func (h *Handler) CheckHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	ctx := r.Context()
@@ -121,7 +143,8 @@ func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	// Клиент передал URL
 	targetURL := r.URL.Query().Get("url")
 	if targetURL != "" {
-		history, err := h.store.GetHistoryByUrl(ctx, targetURL, period)
+		targetURL = checker.NormalizeURL(targetURL)
+		history, err := h.store.GetHistoryByURL(ctx, targetURL, period)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "internal server error: "+err.Error())
 			return
@@ -154,7 +177,7 @@ func (h *Handler) GetHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetAllHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	ctx := r.Context()
@@ -180,7 +203,7 @@ func (h *Handler) GetAllHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreateTargetHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -199,7 +222,7 @@ func (h *Handler) CreateTargetHandler(w http.ResponseWriter, r *http.Request) {
 	// Определяем период проверки
 	periodStr := req.Period
 	if periodStr == "" {
-		periodStr = "5m" // Дефолтное значение
+		periodStr = "1m" // Дефолтное значение
 	}
 
 	period, err := time.ParseDuration(periodStr)
@@ -215,12 +238,13 @@ func (h *Handler) CreateTargetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Валидация каждого URL на корректность
-	for _, rawURL := range req.URLs {
+	for i, rawURL := range req.URLs {
 		parsedURL, err := url.ParseRequestURI(rawURL)
 		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
 			writeError(w, http.StatusBadRequest, "invalid URL format: "+rawURL)
 			return
 		}
+		req.URLs[i] = checker.NormalizeURL(rawURL)
 	}
 
 	// 3. Валидация каждого ID (должен быть больше 0)
@@ -234,11 +258,105 @@ func (h *Handler) CreateTargetHandler(w http.ResponseWriter, r *http.Request) {
 	// 4. Передаем контекст r.Context() и запрос в хранилище
 	res, err := h.store.CreateSubscriptions(r.Context(), req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to create subscription: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "failed to create subscription: "+err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusCreated, res)
+}
+
+func (h *Handler) GetAllSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	limit, offset, err := parsePagination(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	subs, err := h.store.GetAllSubscriptions(r.Context(), limit, offset)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get subscriptions: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, domain.SubscriptionListResponse{Subscriptions: subs})
+}
+
+func (h *Handler) DeleteSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URLs []string `json:"url"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "JSON deserialization error: "+err.Error())
+		return
+	}
+	if len(req.URLs) == 0 {
+		writeError(w, http.StatusBadRequest, "urls list is empty")
+		return
+	}
+
+	urls := make([]string, len(req.URLs))
+	for i, u := range req.URLs {
+		if u == "" {
+			writeError(w, http.StatusBadRequest, "url at index "+strconv.Itoa(i)+" is empty")
+			return
+		}
+		urls[i] = checker.NormalizeURL(u)
+	}
+
+	count, err := h.store.DeleteSubscriptionsByURLs(r.Context(), urls)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete subscriptions: "+err.Error())
+		return
+	}
+	if count == 0 {
+		writeError(w, http.StatusNotFound, "no subscriptions found for the given urls")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": count})
+}
+
+func (h *Handler) DeleteAllSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	ctx := r.Context()
+	count, err := h.store.DeleteAllSubscriptions(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete all subscriptions: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]int64{"deleted": count})
+}
+
+// parsePagination парсит ?limit=&offset=. Возвращает (limit, offset, error).
+func parsePagination(r *http.Request) (int, int, error) {
+	limit := defaultLimit
+	offset := 0
+
+	if v := r.URL.Query().Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return 0, 0, fmt.Errorf("invalid limit: must be a positive integer")
+		}
+		if n > maxLimit {
+			n = maxLimit
+		}
+		limit = n
+	}
+
+	if v := r.URL.Query().Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, 0, fmt.Errorf("invalid offset: must be a non-negative integer")
+		}
+		offset = n
+	}
+
+	return limit, offset, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

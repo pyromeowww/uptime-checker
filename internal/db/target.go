@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pyromeowww/uptime-checker/internal/domain"
@@ -111,7 +112,7 @@ func (s *Store) DeleteOldResults(ctx context.Context, retentionPeriod time.Durat
 	return rowsAffected, nil
 }
 
-func (s *Store) GetHistoryByUrl(ctx context.Context, url string, period time.Duration) ([]domain.CheckResult, error) {
+func (s *Store) GetHistoryByURL(ctx context.Context, url string, period time.Duration) ([]domain.CheckResult, error) {
 	now := time.Now()
 	cutoff := now.Add(-period).Format("2006-01-02 15:04:05")
 
@@ -342,7 +343,7 @@ func (s *Store) GetDueTargets(ctx context.Context) ([]domain.Target, error) {
 		return nil, err
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 	due := make([]domain.Target, 0, len(order))
 	for _, id := range order {
 		info := infos[id]
@@ -351,4 +352,87 @@ func (s *Store) GetDueTargets(ctx context.Context) ([]domain.Target, error) {
 		}
 	}
 	return due, nil
+}
+
+// GetAllSubscriptions Возвращает все значения из subscriptions
+func (s *Store) GetAllSubscriptions(ctx context.Context, limit, offset int) ([]domain.SubscriptionWithURL, error) {
+	query := `
+		SELECT s.id, s.target_id, s.contact_info, s.period, s.is_active, s.created_at, t.url
+		FROM subscriptions s
+		JOIN targets t ON t.id = s.target_id
+		ORDER BY s.id
+		LIMIT ? OFFSET ?
+	`
+	rows, err := s.db.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query subscriptions: %w", err)
+	}
+	defer rows.Close()
+
+	subs := make([]domain.SubscriptionWithURL, 0)
+	for rows.Next() {
+		var sub domain.SubscriptionWithURL
+		if err := rows.Scan(
+			&sub.ID,
+			&sub.TargetID,
+			&sub.ContactInfo,
+			&sub.Period,
+			&sub.IsActive,
+			&sub.CreatedAt,
+			&sub.URL,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan subscription: %w", err)
+		}
+		subs = append(subs, sub)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+	return subs, nil
+}
+
+// DeleteAllSubscriptions удаляет все строки из subscriptions.
+func (s *Store) DeleteAllSubscriptions(ctx context.Context) (int64, error) {
+	query := `DELETE FROM subscriptions`
+	res, err := s.db.ExecContext(ctx, query)
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete all subscriptions: %w", err)
+	}
+	n, err := res.RowsAffected()
+
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteSubscriptionsByURLs удаляет все подписки на target с указанным url.
+func (s *Store) DeleteSubscriptionsByURLs(ctx context.Context, urls []string) (int64, error) {
+	if len(urls) == 0 {
+		return 0, nil
+	}
+
+	placeholders := make([]string, len(urls))
+	args := make([]any, len(urls))
+	for i, u := range urls {
+		placeholders[i] = "?"
+		args[i] = u
+	}
+
+	query := `
+		DELETE FROM subscriptions
+		WHERE target_id IN (
+			SELECT id FROM targets WHERE url IN (` + strings.Join(placeholders, ",") + `)
+		)
+	`
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete subscriptions by urls: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	return n, nil
 }

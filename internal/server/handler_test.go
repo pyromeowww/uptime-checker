@@ -2,10 +2,13 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pyromeowww/uptime-checker/internal/checker"
@@ -90,7 +93,9 @@ func TestCheckHandler_Success(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	h.CheckHandler(recorder, req)
 	var resp domain.CheckResponse
-	json.NewDecoder(recorder.Body).Decode(&resp)
+	if err := json.NewDecoder(recorder.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 
 	if recorder.Code != http.StatusOK {
 		t.Errorf("ожидали статус %d, получили %d", http.StatusOK, recorder.Code)
@@ -148,6 +153,115 @@ func TestHistoryHandlers_Scenarios(t *testing.T) {
 	}
 }
 
+func TestCheckHandler_DownDoesNotFailRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	chk := checker.NewChecker()
+	store := newTestStore(t)
+	h := NewHandler(chk, store)
+
+	body := `{"addresses":["` + server.URL + `","http://127.0.0.1:1"]}`
+	req := httptest.NewRequest(http.MethodPost, "/check", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.CheckHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DOWN не должен ронять запрос: ожидали 200, получили %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp domain.CheckResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Results) != 2 {
+		t.Fatalf("ожидали 2 результата, получили %d", len(resp.Results))
+	}
+	if resp.Results[0].Status != domain.StatusUp {
+		t.Errorf("results[0] должен быть UP, получили %s", resp.Results[0].Status)
+	}
+	if resp.Results[1].Status != domain.StatusDown {
+		t.Errorf("results[1] должен быть DOWN, получили %s", resp.Results[1].Status)
+	}
+}
+
+func TestCheckHandler_AllFailed(t *testing.T) {
+	store := newTestStore(t)
+	// закрываем БД: любой GetOrCreateTarget вернёт ошибку
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	h := NewHandler(checker.NewChecker(), store)
+	body := `{"addresses":["http://a.example","http://b.example"]}`
+	req := httptest.NewRequest(http.MethodPost, "/check", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.CheckHandler(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("ожидали 500, получили %d", rec.Code)
+	}
+	var errResp map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&errResp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if errResp["error"] != "all checks failed" {
+		t.Errorf("ожидали 'all checks failed', получили %q", errResp["error"])
+	}
+}
+
+func TestDeleteSubscriptionsByURLHandler(t *testing.T) {
+	store := newTestStore(t)
+	h := NewHandler(checker.NewChecker(), store)
+
+	// создаём подписки
+	if _, err := store.CreateSubscriptions(context.Background(), domain.SubscriptionRequest{
+		URLs:        []string{"https://a.example", "https://b.example"},
+		ContactInfo: "tg:@user",
+		Period:      "5m",
+	}); err != nil {
+		t.Fatalf("подготовка: %v", err)
+	}
+
+	t.Run("delete by url", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions?url="+url.QueryEscape("https://a.example"), nil)
+		rec := httptest.NewRecorder()
+		h.DeleteSubscriptionsByURLHandler(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("ожидали 200, получили %d: %s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]int64
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if resp["deleted"] != 1 {
+			t.Errorf("ожидали deleted=1, получили %d", resp["deleted"])
+		}
+	})
+
+	t.Run("missing url", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions", nil)
+		rec := httptest.NewRecorder()
+		h.DeleteSubscriptionsByURLHandler(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("ожидали 400, получили %d", rec.Code)
+		}
+	})
+
+	t.Run("unknown url", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions?url="+url.QueryEscape("https://nope.example"), nil)
+		rec := httptest.NewRecorder()
+		h.DeleteSubscriptionsByURLHandler(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("ожидали 404, получили %d", rec.Code)
+		}
+	})
+}
+
 func newTestStore(t *testing.T) *db.Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")
@@ -160,7 +274,7 @@ func newTestStore(t *testing.T) *db.Store {
 	}
 
 	t.Cleanup(func() {
-		store.Close()
+		_ = store.Close() // явно игнорируем повторное закрытие
 	})
 	return store
 }

@@ -19,10 +19,13 @@ func RunServer(ctx context.Context, cfg *config.Config, chk *checker.Checker, st
 
 	mux := http.NewServeMux()
 	h := NewHandler(chk, store)
-	mux.HandleFunc("POST /check", h.CheckHandler)
-	mux.HandleFunc("POST /subscriptions", h.CreateTargetHandler)
+	mux.HandleFunc("POST /api/check", h.CheckHandler)
+	mux.HandleFunc("POST /api/subscriptions", h.CreateTargetHandler)
 	mux.HandleFunc("GET /api/history", h.GetHistoryHandler)
 	mux.HandleFunc("GET /api/history/all", h.GetAllHistoryHandler)
+	mux.HandleFunc("GET /api/subscriptions/all", h.GetAllSubscriptionsHandler)
+	mux.HandleFunc("DELETE /api/subscriptions/all", h.DeleteAllSubscriptionsHandler)
+	mux.HandleFunc("DELETE /api/subscriptions", h.DeleteSubscriptionsHandler)
 
 	server := &http.Server{
 		Addr:         cfg.Port,
