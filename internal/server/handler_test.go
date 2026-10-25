@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -213,53 +212,34 @@ func TestCheckHandler_AllFailed(t *testing.T) {
 	}
 }
 
-func TestDeleteSubscriptionsByURLHandler(t *testing.T) {
+func TestDeleteSubscriptionsHandler(t *testing.T) {
 	store := newTestStore(t)
 	h := NewHandler(checker.NewChecker(), store)
 
-	// создаём подписки
 	if _, err := store.CreateSubscriptions(context.Background(), domain.SubscriptionRequest{
-		URLs:        []string{"https://a.example", "https://b.example"},
+		URLs:        []string{"https://a.example", "https://b.example", "https://c.example"},
 		ContactInfo: "tg:@user",
 		Period:      "5m",
 	}); err != nil {
 		t.Fatalf("подготовка: %v", err)
 	}
 
-	t.Run("delete by url", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions?url="+url.QueryEscape("https://a.example"), nil)
-		rec := httptest.NewRecorder()
-		h.DeleteSubscriptionsByURLHandler(rec, req)
+	body := `{"url":["https://a.example","https://c.example"]}`
+	req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.DeleteSubscriptionsHandler(rec, req)
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("ожидали 200, получили %d: %s", rec.Code, rec.Body.String())
-		}
-		var resp map[string]int64
-		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if resp["deleted"] != 1 {
-			t.Errorf("ожидали deleted=1, получили %d", resp["deleted"])
-		}
-	})
-
-	t.Run("missing url", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions", nil)
-		rec := httptest.NewRecorder()
-		h.DeleteSubscriptionsByURLHandler(rec, req)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("ожидали 400, получили %d", rec.Code)
-		}
-	})
-
-	t.Run("unknown url", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodDelete, "/api/subscriptions?url="+url.QueryEscape("https://nope.example"), nil)
-		rec := httptest.NewRecorder()
-		h.DeleteSubscriptionsByURLHandler(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Errorf("ожидали 404, получили %d", rec.Code)
-		}
-	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ожидали 200, получили %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]int64
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["deleted"] != 2 {
+		t.Errorf("ожидали deleted=2, получили %d", resp["deleted"])
+	}
 }
 
 func newTestStore(t *testing.T) *db.Store {
